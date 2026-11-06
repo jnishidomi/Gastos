@@ -62,6 +62,8 @@ th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:50
 .btn.rec{background:var(--g4)}
 .rr{display:grid;grid-template-columns:1fr 92px 56px 46px;gap:6px;margin-bottom:8px;align-items:center;font-size:.85rem}
 .rr .x{font-size:.9rem}
+#auth{position:fixed;inset:0;z-index:100;overflow:auto;padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px));background:linear-gradient(160deg,var(--bg1),var(--bg2))}
+#auth .card{max-width:380px;margin:10vh auto 0}
 .hide{display:none!important}
 .item .ed{background:none;border:0;color:var(--mut);font-size:1rem;cursor:pointer;padding:6px}
 .fl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:6px 0 10px}
@@ -116,6 +118,7 @@ th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:50
   </section>
 
   <section id="cfg" class="hide">
+    <div class="card hide" id="acct"><h2>👤 Conta</h2><div class="note" id="acctinfo" style="margin:0 0 10px"></div><button class="btn alt" id="logout">Sair da conta</button></div>
     <div class="card"><h2>Categorias e orçamento mensal</h2>
       <div class="note" style="margin:0 0 10px">Emoji, nome e limite mensal em R$ (opcional). Renomear atualiza os lançamentos antigos. Remover não apaga lançamentos.</div>
       <div class="cr" style="grid-template-columns:1fr auto"><input id="ncat" placeholder="Nova categoria"><button class="btn" id="addcat">Adicionar</button></div>
@@ -137,8 +140,10 @@ th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:50
   </section>
 </div>
 
+<div id='auth' class='hide'><div class='card'><h2>🔐 Entre para salvar na nuvem</h2><label>E-mail</label><input id='ae' type='email' autocomplete='email' placeholder='voce@email.com'><label style='margin-top:10px'>Senha (mínimo de 6 caracteres)</label><input id='ap' type='password' autocomplete='current-password'><div style='display:flex;gap:8px;margin-top:14px;flex-wrap:wrap'><button class='btn' id='alogin'>Entrar</button><button class='btn ghost' id='asign'>Criar conta</button></div><div class='note' id='amsg'></div></div></div>
 <button class='fab hide' id='fab' aria-label='Novo gasto'>＋</button>
 <div class='toast hide' id='toast'></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
 <script>
 const DEFCATS=[
  ["Restaurantes","🍽️","#f59e0b","#ef4444"],["iFood","🛵","#ef4444","#ec4899"],["Energia / Luz","💡","#facc15","#f59e0b"],
@@ -164,52 +169,116 @@ const MN=["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez
 const pad=n=>String(n).padStart(2,"0");
 const today=new Date(), todayStr=today.getFullYear()+"-"+pad(today.getMonth()+1)+"-"+pad(today.getDate());
 const curM=todayStr.slice(0,7);
-let items=[], col=null, mode="local";
+/* ===== CONFIGURAÇÃO DA NUVEM (Supabase) — cole aqui a URL e a chave pública do seu projeto ===== */
+const SB_URL='https://lngqxbkbvikvrlrbuulu.supabase.co', SB_KEY='sb_publishable_jwqyWQvSrlaAvqVDZHj5lQ_LiTZ5IAY';
+/* ================================================================================================ */
+const SB_ON=SB_URL.indexOf('https://')===0&&SB_KEY.length>20&&SB_KEY.indexOf('COLE')!==0;
+let items=[], col=null, mode=SB_ON?'none':'local';
 
 /* ---------- armazenamento ---------- */
 function lsGet(){try{return JSON.parse(localStorage.getItem("gastos")||"[]")}catch(e){return[]}}
 function lsSet(){try{localStorage.setItem("gastos",JSON.stringify(items))}catch(e){}}
-async function init(){
-  let db=null,user=null;
-  try{db=await claude.use("db");user=await claude.use("user")}catch(e){}
-  if(db&&user){
-    try{
-      const uid=await user.id();
-      if(uid){
-        col=db.collection("data/users/"+uid+"/gastos/i");cfgCol=db.collection("data/users/"+uid+"/config/i");mode="cloud";migrate();
-        cfgCol.onSnapshot(s=>{const d=s.docs.find(x=>x.id==='main');applyCfg(d?d.data():null);render();if(!$('cfg').classList.contains('hide'))renderCfg()},()=>{});
-        $("status").textContent="☁️ Sincronizado com a sua conta — celular e PC veem os mesmos dados";
-        col.onSnapshot(s=>{items=s.docs.map(d=>({id:d.id,...d.data()}));render()},
-          ()=>{mode='local';items=lsGet();$('status').textContent='💾 Sem acesso à conta agora: mostrando os dados deste aparelho';render()});
-        return;
-      }
-    }catch(e){}
-  }
-  items=lsGet();try{applyCfg(JSON.parse(localStorage.getItem('gastos_cfg')||'null'))}catch(e){}
-  $("status").textContent="💾 Seus dados ficam salvos só neste aparelho e navegador. Use “Exportar CSV” de vez em quando como backup.";
-  render();
+function toRow(o){const r={};for(const k in o){if(k==='id'||o[k]===undefined)continue;r[k==='desc'?'descricao':k]=o[k]}return r}
+function fromRow(r){return{id:r.id,data:r.data,cat:r.cat,valor:Number(r.valor),desc:r.descricao||'',local:r.local||'',tipo:r.tipo,rid:r.rid||undefined}}
+let sb=null,uid=null;
+function showAuth(msg,fatal){
+  mode='none';items=[];render();
+  $('auth').classList.remove('hide');$('amsg').textContent=msg||'';
+  $('status').textContent='🔐 Entre na sua conta para ver e salvar seus gastos';
+  $('alogin').disabled=$('asign').disabled=!!fatal;
 }
-async function save(o){
-  if(mode==="cloud"){try{await col.add(o)}catch(e){$("msg").textContent="Erro ao salvar. Tente de novo."}}
-  else{items.push({id:"l"+Date.now()+Math.random().toString(36).slice(2,6),...o});lsSet();render()}
+function traduz(m){
+  m=String(m||'');
+  if(/invalid login/i.test(m))return 'E-mail ou senha incorretos.';
+  if(/not confirmed/i.test(m))return 'Confirme o e-mail pelo link que foi enviado e tente de novo.';
+  if(/already registered/i.test(m))return 'Esse e-mail já tem conta. Clique em Entrar.';
+  if(/password/i.test(m)&&/6/.test(m))return 'A senha precisa ter pelo menos 6 caracteres.';
+  if(/rate limit/i.test(m))return 'Muitas tentativas. Espere um pouco e tente de novo.';
+  return m;
 }
-async function migrate(){
+async function doAuth(sign){
+  const email=$('ae').value.trim(),password=$('ap').value;
+  if(!email||password.length<6){$('amsg').textContent='Informe e-mail e senha (mínimo de 6 caracteres).';return}
+  $('amsg').textContent='Aguarde…';
   try{
-    if(localStorage.getItem('gastos_migrado'))return;
-    const loc=lsGet();let ok=true,n=0;
-    for(const it of loc){const r=Object.assign({},it);const id=String(r.id);delete r.id;try{await col.doc(id).set(r);n++}catch(e){ok=false}}
-    if(ok){localStorage.setItem('gastos_migrado','1');if(n)toast(n+' lançamento(s) copiado(s) para a sua conta')}
+    const r=sign?await sb.auth.signUp({email,password}):await sb.auth.signInWithPassword({email,password});
+    if(r.error){$('amsg').textContent=traduz(r.error.message);return}
+    if(r.data&&r.data.session){$('ap').value='';await enter(r.data.session)}
+    else $('amsg').textContent='Conta criada. Abra o link enviado ao seu e-mail para confirmar e depois clique em Entrar.';
+  }catch(e){$('amsg').textContent='Não foi possível conectar. Verifique a internet.'}
+}
+async function enter(ses){
+  uid=ses.user.id;mode='sb';
+  $('auth').classList.add('hide');$('acct').classList.remove('hide');$('acctinfo').textContent='Conectado como '+ses.user.email;
+  $('status').textContent='☁️ Salvo na nuvem — '+ses.user.email;
+  await migrateSb();await loadCfgSb();await loadSb();
+}
+async function loadSb(){
+  let all=[],from=0;
+  for(;;){
+    const {data,error}=await sb.from('lancamentos').select('*').order('data',{ascending:false}).order('id').range(from,from+999);
+    if(error){$('status').textContent='⚠️ Erro ao carregar os dados: '+error.message;return}
+    all=all.concat(data||[]);if(!data||data.length<1000)break;from+=1000;
+  }
+  items=all.map(fromRow);render();
+}
+async function loadCfgSb(){
+  const {data,error}=await sb.from('config').select('cfg').maybeSingle();
+  if(error)return;
+  applyCfg(data&&data.cfg&&data.cfg.cats?data.cfg:null);render();
+}
+async function migrateSb(){
+  if(localStorage.getItem('gastos_migrado_sb'))return;
+  try{
+    const loc=lsGet();
+    if(loc.length){
+      const rows=loc.map(i=>Object.assign({tipo:'despesa'},toRow(i)));
+      const {error}=await sb.from('lancamentos').insert(rows,{defaultToNull:false});
+      if(error){toast('Não consegui copiar os dados deste aparelho: '+error.message);return}
+      toast(loc.length+' lançamento(s) deste aparelho copiado(s) para a sua conta');
+    }
+    const lc=JSON.parse(localStorage.getItem('gastos_cfg')||'null');
+    if(lc){const {data}=await sb.from('config').select('user_id').maybeSingle();if(!data)await sb.from('config').upsert({user_id:uid,cfg:lc})}
+    localStorage.setItem('gastos_migrado_sb','1');
   }catch(e){}
 }
+async function init(){
+  if(!SB_ON){
+    items=lsGet();try{applyCfg(JSON.parse(localStorage.getItem('gastos_cfg')||'null'))}catch(e){}
+    $('status').textContent='💾 Seus dados ficam salvos só neste aparelho e navegador. Use “Exportar CSV” de vez em quando como backup.';
+    render();return;
+  }
+  if(!window.supabase){showAuth('Não foi possível carregar o serviço de login. Verifique a internet e recarregue a página.',true);return}
+  sb=window.supabase.createClient(SB_URL,SB_KEY);
+  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')setTimeout(()=>{uid=null;$('acct').classList.add('hide');showAuth('')},0)});
+  try{const {data}=await sb.auth.getSession();if(data&&data.session){await enter(data.session);return}}catch(e){}
+  showAuth('');
+}
+$('alogin').onclick=()=>doAuth(false);$('asign').onclick=()=>doAuth(true);
+$('ap').onkeydown=e=>{if(e.key==='Enter')doAuth(false)};
+$('logout').onclick=async()=>{try{await sb.auth.signOut()}catch(e){}};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&mode==='sb'){loadCfgSb();loadSb()}});
+async function save(o){
+  if(mode==='sb'){
+    const {error}=await sb.from('lancamentos').insert(toRow(o));
+    if(error){$('msg').textContent='Erro ao salvar: '+error.message;return}
+    await loadSb();
+  }else if(mode==='local'){items.push({id:'l'+Date.now()+Math.random().toString(36).slice(2,6),...o});lsSet();render()}
+}
 async function upd(id,o){
-  if(mode==='cloud'){try{await col.doc(id).update(o)}catch(e){$('msg').textContent='Erro ao salvar.'}}
-  else{const i=items.find(x=>x.id===id);if(i)Object.assign(i,o);lsSet();render()}
+  if(mode==='sb'){
+    const {error}=await sb.from('lancamentos').update(toRow(o)).eq('id',id);
+    if(error){$('msg').textContent='Erro ao salvar: '+error.message;return}
+  }else if(mode!=='local')return;
+  const i=items.find(x=>x.id===id);if(i)Object.assign(i,o);
+  if(mode==='local')lsSet();
+  render();
 }
 async function saveCfg(){
   rebuildCI();
   const o={cats:CATS.map(x=>({n:x[0],e:x[1],c1:x[2],c2:x[3]})),budgets:cfg.budgets,rec:cfg.rec||[]};
-  if(mode==='cloud'){try{await cfgCol.doc('main').set(o)}catch(e){}}
-  else{try{localStorage.setItem('gastos_cfg',JSON.stringify(o))}catch(e){}}
+  if(mode==='sb'){const {error}=await sb.from('config').upsert({user_id:uid,cfg:o});if(error)$('msg').textContent='Erro ao salvar as configurações: '+error.message}
+  else if(mode==='local'){try{localStorage.setItem('gastos_cfg',JSON.stringify(o))}catch(e){}}
   fillCats();render();renderCfg();
 }
 function toast(t,undo){
@@ -219,8 +288,10 @@ function toast(t,undo){
 }
 async function del(id,quiet){
   const it=items.find(i=>i.id===id);if(it&&!quiet){lastDel=it;toast('Lançamento excluído',true)}
-  if(mode==="cloud"){try{await col.doc(id).delete()}catch(e){}}
-  else{items=items.filter(i=>i.id!==id);lsSet();render()}
+  if(mode==='sb'){const {error}=await sb.from('lancamentos').delete().eq('id',id);if(error){$('msg').textContent='Erro ao excluir: '+error.message;return}}
+  else if(mode!=='local')return;
+  items=items.filter(i=>i.id!==id);if(mode==='local')lsSet();
+  render();
 }
 
 /* ---------- ui ---------- */
