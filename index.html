@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Controle de Gastos</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1b1340">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gastos">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 :root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
 --bg1:#1b1340;--bg2:#0f3a5f;--card:rgba(255,255,255,.08);--bd:rgba(255,255,255,.14);--tx:#f4f3ff;--mut:#b7b4d6;--inp:rgba(0,0,0,.28);
@@ -118,6 +126,7 @@ th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:50
   </section>
 
   <section id="cfg" class="hide">
+    <div class="card" id="inst"><h2>📲 Instalar no celular</h2><div class="note" id="insthint" style="margin:0 0 10px"></div><button class="btn hide" id="instbtn">Instalar app</button></div>
     <div class="card hide" id="acct"><h2>👤 Conta</h2><div class="note" id="acctinfo" style="margin:0 0 10px"></div><button class="btn alt" id="logout">Sair da conta</button></div>
     <div class="card"><h2>Categorias e orçamento mensal</h2>
       <div class="note" style="margin:0 0 10px">Emoji, nome e limite mensal em R$ (opcional). Renomear atualiza os lançamentos antigos. Remover não apaga lançamentos.</div>
@@ -143,7 +152,7 @@ th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:50
 <div id='auth' class='hide'><div class='card'><h2>🔐 Entre para salvar na nuvem</h2><label>E-mail</label><input id='ae' type='email' autocomplete='email' placeholder='voce@email.com'><label style='margin-top:10px'>Senha (mínimo de 6 caracteres)</label><input id='ap' type='password' autocomplete='current-password'><div style='display:flex;gap:8px;margin-top:14px;flex-wrap:wrap'><button class='btn' id='alogin'>Entrar</button><button class='btn ghost' id='asign'>Criar conta</button></div><div class='note' id='amsg'></div></div></div>
 <button class='fab hide' id='fab' aria-label='Novo gasto'>＋</button>
 <div class='toast hide' id='toast'></div>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
+<script src="supabase.js"></script>
 <script>
 const DEFCATS=[
  ["Restaurantes","🍽️","#f59e0b","#ef4444"],["iFood","🛵","#ef4444","#ec4899"],["Energia / Luz","💡","#facc15","#f59e0b"],
@@ -180,9 +189,46 @@ function lsGet(){try{return JSON.parse(localStorage.getItem("gastos")||"[]")}cat
 function lsSet(){try{localStorage.setItem("gastos",JSON.stringify(items))}catch(e){}}
 function toRow(o){const r={};for(const k in o){if(k==='id'||o[k]===undefined)continue;r[k==='desc'?'descricao':k]=o[k]}return r}
 function fromRow(r){return{id:r.id,data:r.data,cat:r.cat,valor:Number(r.valor),desc:r.descricao||'',local:r.local||'',tipo:r.tipo,rid:r.rid||undefined}}
-let sb=null,uid=null;
+function fromPatch(p){const o={};for(const k in p)o[k==='descricao'?'desc':k]=p[k];return o}
+function uuid(){
+  if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16)});
+}
+function canon(v){if(Array.isArray(v))return v.map(canon);if(v&&typeof v==='object'){const o={};Object.keys(v).sort().forEach(k=>{o[k]=canon(v[k])});return o}return v}
+const same=(a,b)=>JSON.stringify(canon(a))===JSON.stringify(canon(b));
+function cfgToRaw(){return{cats:CATS.map(x=>({n:x[0],e:x[1],c1:x[2],c2:x[3]})),budgets:cfg.budgets,rec:cfg.rec||[]}}
+
+/* estado da nuvem + fila offline */
+let sb=null,uid=null,curEmail='',queue=[],srv=[],cfgRaw=null,cfgMig=null,flushing=false,haveSession=true,syncing=false,again=false,retryT=null;
+const qKey=()=>'gastos_fila_'+uid, cKey=()=>'gastos_cache_'+uid;
+function qLoad(){try{queue=JSON.parse(localStorage.getItem(qKey())||'[]')}catch(e){queue=[]}}
+function qSave(){try{localStorage.setItem(qKey(),JSON.stringify(queue,(k,v)=>k==='sending'?undefined:v))}catch(e){}}
+function cacheSave(){try{localStorage.setItem(cKey(),JSON.stringify({items:srv,cfg:cfgRaw}))}catch(e){}}
+function pendCfg(){const l=queue.filter(o=>o.t==='cfg');return l.length?l[l.length-1].cfg:null}
+function applyQ(base){
+  let arr=base.map(x=>Object.assign({},x));
+  for(const op of queue){
+    if(op.t==='ins'){for(const r of op.rows){if(!arr.some(x=>x.id===r.id))arr.push(fromRow(r))}}
+    else if(op.t==='upd'){const i=arr.find(x=>x.id===op.id);if(i)Object.assign(i,fromPatch(op.patch))}
+    else if(op.t==='del'){arr=arr.filter(x=>x.id!==op.id)}
+  }
+  return arr;
+}
+function cacheLoad(){
+  try{const c=JSON.parse(localStorage.getItem(cKey())||'null');if(c){srv=c.items||[];cfgRaw=c.cfg||null}}catch(e){}
+  items=applyQ(srv);
+  const u=pendCfg()||cfgRaw;applyCfg(u&&u.cats?u:null);
+}
+function isNet(res){return !!res&&!!res.error&&(res.status===0||/failed to fetch|network|load failed|fetch/i.test(res.error.message||''))}
+function isNetErr(e){return !!e&&(e.name==='AuthRetryableFetchError'||/failed to fetch|network|load failed|fetch/i.test(e.message||''))}
+function isAuthErr(res){return !!res&&!!res.error&&(res.status===401||res.error.code==='PGRST301'||/jwt/i.test(res.error.message||''))}
+function setStatus(){
+  if(mode!=='sb')return;
+  const n=queue.length,on=navigator.onLine!==false;
+  $('status').textContent=n?(on?'🔄 Sincronizando '+n+' pendente(s)…':'📴 Sem internet — '+n+' lançamento(s) aguardando para sincronizar'):(on?'☁️ Salvo na nuvem — '+curEmail:'📴 Sem internet — mostrando os dados salvos neste aparelho');
+}
 function showAuth(msg,fatal){
-  mode='none';items=[];render();
+  mode='none';items=[];queue=[];srv=[];render();
   $('auth').classList.remove('hide');$('amsg').textContent=msg||'';
   $('status').textContent='🔐 Entre na sua conta para ver e salvar seus gastos';
   $('alogin').disabled=$('asign').disabled=!!fatal;
@@ -207,40 +253,98 @@ async function doAuth(sign){
     else $('amsg').textContent='Conta criada. Abra o link enviado ao seu e-mail para confirmar e depois clique em Entrar.';
   }catch(e){$('amsg').textContent='Não foi possível conectar. Verifique a internet.'}
 }
-async function enter(ses){
-  uid=ses.user.id;mode='sb';
-  $('auth').classList.add('hide');$('acct').classList.remove('hide');$('acctinfo').textContent='Conectado como '+ses.user.email;
-  $('status').textContent='☁️ Salvo na nuvem — '+ses.user.email;
-  await migrateSb();await loadCfgSb();await loadSb();
+async function enter(ses,offlineStart){
+  uid=ses.user.id;curEmail=ses.user.email||'';mode='sb';haveSession=!offlineStart;
+  try{localStorage.setItem('gastos_last_user',JSON.stringify({id:uid,email:curEmail}))}catch(e){}
+  $('auth').classList.add('hide');$('acct').classList.remove('hide');$('acctinfo').textContent='Conectado como '+curEmail;
+  qLoad();cacheLoad();render();setStatus();
+  migrateSb();
+  await sync();
 }
-async function loadSb(){
-  let all=[],from=0;
-  for(;;){
-    const {data,error}=await sb.from('lancamentos').select('*').order('data',{ascending:false}).order('id').range(from,from+999);
-    if(error){$('status').textContent='⚠️ Erro ao carregar os dados: '+error.message;return}
-    all=all.concat(data||[]);if(!data||data.length<1000)break;from+=1000;
-  }
-  items=all.map(fromRow);render();
+async function ensureSession(){
+  try{
+    const r=await sb.auth.getSession();
+    if(r.data&&r.data.session)return true;
+    if(r.error&&isNetErr(r.error))return false;
+  }catch(e){return false}
+  showAuth('Sua sessão expirou. Entre de novo para sincronizar.');return false;
 }
-async function loadCfgSb(){
-  const {data,error}=await sb.from('config').select('cfg').maybeSingle();
-  if(error)return;
-  applyCfg(data&&data.cfg&&data.cfg.cats?data.cfg:null);render();
-}
-async function migrateSb(){
+function migrateSb(){
   if(localStorage.getItem('gastos_migrado_sb'))return;
   try{
     const loc=lsGet();
     if(loc.length){
-      const rows=loc.map(i=>Object.assign({tipo:'despesa'},toRow(i)));
-      const {error}=await sb.from('lancamentos').insert(rows,{defaultToNull:false});
-      if(error){toast('Não consegui copiar os dados deste aparelho: '+error.message);return}
-      toast(loc.length+' lançamento(s) deste aparelho copiado(s) para a sua conta');
+      const rows=loc.map(i=>{const r=toRow(i);r.id=uuid();r.tipo=r.tipo||'despesa';return r});
+      queue.push({t:'ins',rows});
+      toast(loc.length+' lançamento(s) deste aparelho serão copiados para a sua conta');
     }
-    const lc=JSON.parse(localStorage.getItem('gastos_cfg')||'null');
-    if(lc){const {data}=await sb.from('config').select('user_id').maybeSingle();if(!data)await sb.from('config').upsert({user_id:uid,cfg:lc})}
-    localStorage.setItem('gastos_migrado_sb','1');
+    cfgMig=JSON.parse(localStorage.getItem('gastos_cfg')||'null');
+    qSave();localStorage.setItem('gastos_migrado_sb','1');
+    items=applyQ(srv);render();
   }catch(e){}
+}
+async function runOp(op){
+  try{
+    if(op.t==='ins')return await sb.from('lancamentos').upsert(op.rows,{onConflict:'id',ignoreDuplicates:true,defaultToNull:false});
+    if(op.t==='upd')return await sb.from('lancamentos').update(op.patch).eq('id',op.id);
+    if(op.t==='del')return await sb.from('lancamentos').delete().eq('id',op.id);
+    if(op.t==='cfg')return await sb.from('config').upsert({user_id:uid,cfg:op.cfg});
+    return{error:null,status:200};
+  }catch(e){return{error:{message:'Failed to fetch'},status:0}}
+}
+async function flush(){
+  if(mode!=='sb'||flushing||!queue.length||navigator.onLine===false)return;
+  flushing=true;
+  try{
+    while(queue.length){
+      const op=queue[0];op.sending=true;
+      let res=await runOp(op);
+      if(isAuthErr(res)){
+        try{const r=await sb.auth.refreshSession();if(r&&r.data&&r.data.session)res=await runOp(op)}catch(e){}
+      }
+      delete op.sending;
+      if(isNet(res)||isAuthErr(res))break;
+      if(res.error)toast('Um item foi recusado pelo servidor e saiu da fila: '+res.error.message);
+      queue=queue.filter(o=>o!==op);qSave();setStatus();
+    }
+  }catch(e){}
+  flushing=false;
+  if(queue.length){clearTimeout(retryT);retryT=setTimeout(sync,15000)}
+}
+async function loadSb(){
+  if(mode!=='sb'||navigator.onLine===false)return;
+  let all=[],from=0;
+  for(;;){
+    const res=await sb.from('lancamentos').select('*').order('data',{ascending:false}).order('id').range(from,from+999);
+    if(res.error){if(!isNet(res))$('status').textContent='⚠️ Erro ao carregar os dados: '+res.error.message;return}
+    all=all.concat(res.data||[]);if(!res.data||res.data.length<1000)break;from+=1000;
+  }
+  srv=all.map(fromRow);cacheSave();
+  const nx=applyQ(srv);
+  if(JSON.stringify(nx)!==JSON.stringify(items)){items=nx;render()}
+  setStatus();
+}
+async function loadCfgSb(){
+  if(mode!=='sb'||navigator.onLine===false)return;
+  const res=await sb.from('config').select('cfg').maybeSingle();
+  if(res.error)return;
+  cfgRaw=res.data&&res.data.cfg&&res.data.cfg.cats?res.data.cfg:null;
+  if(!cfgRaw&&cfgMig&&cfgMig.cats){queue=queue.filter(o=>o.t!=='cfg');queue.push({t:'cfg',cfg:cfgMig});qSave();cfgRaw=cfgMig}
+  cfgMig=null;cacheSave();
+  const u=pendCfg()||cfgRaw;
+  if(u&&u.cats&&!same(u,cfgToRaw())){applyCfg(u);render();if(!$('cfg').classList.contains('hide'))renderCfg()}
+}
+async function sync(){
+  if(mode!=='sb')return;
+  if(syncing){again=true;return}
+  syncing=true;
+  try{
+    if(navigator.onLine===false)return;
+    if(!haveSession){haveSession=await ensureSession();if(!haveSession)return}
+    await flush();
+    if(!queue.length){await loadCfgSb();await loadSb()}
+  }finally{syncing=false;setStatus()}
+  if(again){again=false;sync()}
 }
 async function init(){
   if(!SB_ON){
@@ -251,33 +355,54 @@ async function init(){
   if(!window.supabase){showAuth('Não foi possível carregar o serviço de login. Verifique a internet e recarregue a página.',true);return}
   sb=window.supabase.createClient(SB_URL,SB_KEY);
   sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')setTimeout(()=>{uid=null;$('acct').classList.add('hide');showAuth('')},0)});
-  try{const {data}=await sb.auth.getSession();if(data&&data.session){await enter(data.session);return}}catch(e){}
+  let ses=null,err=null;
+  try{const r=await sb.auth.getSession();ses=r.data&&r.data.session;err=r.error}catch(e){err=e}
+  if(ses){await enter(ses);return}
+  let last=null;try{last=JSON.parse(localStorage.getItem('gastos_last_user')||'null')}catch(e){}
+  if(last&&last.id&&(navigator.onLine===false||isNetErr(err))){await enter({user:last},true);return}
   showAuth('');
 }
 $('alogin').onclick=()=>doAuth(false);$('asign').onclick=()=>doAuth(true);
 $('ap').onkeydown=e=>{if(e.key==='Enter')doAuth(false)};
-$('logout').onclick=async()=>{try{await sb.auth.signOut()}catch(e){}};
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&mode==='sb'){loadCfgSb();loadSb()}});
+$('logout').onclick=async()=>{
+  if(queue.length){await sync();if(queue.length){toast('Há '+queue.length+' lançamento(s) sem sincronizar. Conecte-se à internet antes de sair.');return}}
+  const u=uid;
+  try{await sb.auth.signOut({scope:'local'})}catch(e){}
+  try{localStorage.removeItem('gastos_cache_'+u);localStorage.removeItem('gastos_fila_'+u);localStorage.removeItem('gastos_last_user');localStorage.removeItem('sb-'+new URL(SB_URL).hostname.split('.')[0]+'-auth-token')}catch(e){}
+  uid=null;$('acct').classList.add('hide');showAuth('');
+};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')sync()});
+window.addEventListener('online',()=>{setStatus();sync()});
+window.addEventListener('offline',setStatus);
+setInterval(()=>{if(document.visibilityState==='visible')sync()},60000);
+
 async function save(o){
   if(mode==='sb'){
-    const {error}=await sb.from('lancamentos').insert(toRow(o));
-    if(error){$('msg').textContent='Erro ao salvar: '+error.message;return}
-    await loadSb();
+    const row=toRow(o);row.id=uuid();row.tipo=row.tipo||'despesa';
+    items.push(fromRow(row));queue.push({t:'ins',rows:[row]});qSave();render();setStatus();sync();
   }else if(mode==='local'){items.push({id:'l'+Date.now()+Math.random().toString(36).slice(2,6),...o});lsSet();render()}
 }
 async function upd(id,o){
-  if(mode==='sb'){
-    const {error}=await sb.from('lancamentos').update(toRow(o)).eq('id',id);
-    if(error){$('msg').textContent='Erro ao salvar: '+error.message;return}
-  }else if(mode!=='local')return;
+  if(mode==='sb'){queue.push({t:'upd',id,patch:toRow(o)});qSave()}
+  else if(mode!=='local')return;
   const i=items.find(x=>x.id===id);if(i)Object.assign(i,o);
   if(mode==='local')lsSet();
   render();
+  if(mode==='sb'){setStatus();sync()}
+}
+async function del(id,quiet){
+  const it=items.find(i=>i.id===id);if(it&&!quiet){lastDel=it;toast('Lançamento excluído',true)}
+  if(mode==='sb'){queue.push({t:'del',id});qSave()}
+  else if(mode!=='local')return;
+  items=items.filter(i=>i.id!==id);
+  if(mode==='local')lsSet();
+  render();
+  if(mode==='sb'){setStatus();sync()}
 }
 async function saveCfg(){
   rebuildCI();
-  const o={cats:CATS.map(x=>({n:x[0],e:x[1],c1:x[2],c2:x[3]})),budgets:cfg.budgets,rec:cfg.rec||[]};
-  if(mode==='sb'){const {error}=await sb.from('config').upsert({user_id:uid,cfg:o});if(error)$('msg').textContent='Erro ao salvar as configurações: '+error.message}
+  const o=cfgToRaw();
+  if(mode==='sb'){cfgRaw=o;queue=queue.filter(x=>x.t!=='cfg'||x.sending);queue.push({t:'cfg',cfg:o});qSave();cacheSave();setStatus();sync()}
   else if(mode==='local'){try{localStorage.setItem('gastos_cfg',JSON.stringify(o))}catch(e){}}
   fillCats();render();renderCfg();
 }
@@ -285,13 +410,6 @@ function toast(t,undo){
   const el=$('toast');el.innerHTML='<span>'+t+'</span>'+(undo?'<button id=undo>Desfazer</button>':'');
   el.classList.remove('hide');clearTimeout(tmr);tmr=setTimeout(()=>el.classList.add('hide'),6000);
   if(undo)$('undo').onclick=async()=>{el.classList.add('hide');if(lastDel){const{id,...r}=lastDel;lastDel=null;await save(r)}};
-}
-async function del(id,quiet){
-  const it=items.find(i=>i.id===id);if(it&&!quiet){lastDel=it;toast('Lançamento excluído',true)}
-  if(mode==='sb'){const {error}=await sb.from('lancamentos').delete().eq('id',id);if(error){$('msg').textContent='Erro ao excluir: '+error.message;return}}
-  else if(mode!=='local')return;
-  items=items.filter(i=>i.id!==id);if(mode==='local')lsSet();
-  render();
 }
 
 /* ---------- ui ---------- */
@@ -474,6 +592,18 @@ function dash(){
     return `<tr><td>${(CI[c]||CI["Outros"])[1]} ${esc(c)}</td><td>${brl(a)}</td><td>${brl(b)}</td><td class="${d>0?"up":d<0?"down":""}">${d===0?"—":(d>0?"▲ ":"▼ ")+brl(Math.abs(d))}</td></tr>`}).join("")
    +`<tr><td><b>Total</b></td><td><b>${brl(ptot)}</b></td><td><b>${brl(tot)}</b></td><td class="${tot>ptot?"up":"down"}"><b>${tot===ptot?"—":(tot>ptot?"▲ ":"▼ ")+brl(Math.abs(tot-ptot))}</b></td></tr>`;
 }
+/* instalar como app + service worker */
+let dip=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();dip=e;$('instbtn').classList.remove('hide')});
+$('instbtn').onclick=async()=>{if(!dip)return;dip.prompt();try{await dip.userChoice}catch(e){}dip=null;$('instbtn').classList.add('hide')};
+(function(){
+  const standalone=(window.matchMedia&&matchMedia('(display-mode: standalone)').matches)||navigator.standalone;
+  if(standalone){$('inst').classList.add('hide');return}
+  $('insthint').textContent=/iphone|ipad|ipod/i.test(navigator.userAgent)
+    ?'No iPhone: abra no Safari, toque em Compartilhar (quadrado com seta) e depois em “Adicionar à Tela de Início”.'
+    :'No Android (Chrome): toque no botão abaixo ou, no menu ⋮, em “Instalar app” / “Adicionar à tela inicial”.';
+})();
+if('serviceWorker' in navigator&&location.protocol==='https:'){window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})})}
 render();init();
 </script>
 </body>
