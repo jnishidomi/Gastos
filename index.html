@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Controle de Gastos</title>
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#1b1340">
+<meta name="theme-color" content="#2a2457" id="mtc">
+<script>try{var t=localStorage.getItem("gastos_tema");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icon-192.png">
 <meta name="mobile-web-app-capable" content="yes">
@@ -14,7 +15,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
 :root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
---bg1:#1b1340;--bg2:#0f3a5f;--card:rgba(255,255,255,.08);--bd:rgba(255,255,255,.14);--tx:#f4f3ff;--mut:#b7b4d6;--inp:rgba(0,0,0,.28);
+--bg1:#2a2457;--bg2:#245279;--card:rgba(255,255,255,.11);--bd:rgba(255,255,255,.2);--tx:#f6f5ff;--mut:#c9c6e6;--inp:rgba(255,255,255,.10);
 --g1:linear-gradient(135deg,#7c3aed,#ec4899);--g2:linear-gradient(135deg,#06b6d4,#3b82f6);--g3:linear-gradient(135deg,#f59e0b,#ef4444);--g4:linear-gradient(135deg,#10b981,#22d3ee)}
 @media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg1:#efe9ff;--bg2:#dff1ff;--card:rgba(255,255,255,.7);--bd:rgba(80,60,160,.15);--tx:#231b4d;--mut:#6a638f;--inp:rgba(255,255,255,.9)}}
 :root[data-theme="light"]{--bg1:#efe9ff;--bg2:#dff1ff;--card:rgba(255,255,255,.7);--bd:rgba(80,60,160,.15);--tx:#231b4d;--mut:#6a638f;--inp:rgba(255,255,255,.9)}
@@ -86,6 +87,9 @@ th:first-child,td:first-child{text-align:left}th{color:var(--mut);font-weight:50
 tr.sr td{font-size:.8rem;color:var(--mut)}
 #updpop{position:fixed;inset:0;z-index:110;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(8,4,24,.72)}
 #updpop .card{max-width:360px;margin:0;width:100%}
+.thm{min-height:40px!important;padding:6px 14px!important;font-size:1.1rem}
+.skhint{display:none}
+@media(max-width:720px){.skhint{display:block}}
 .hide{display:none!important}
 .item .ed{background:none;border:0;color:var(--mut);font-size:1rem;cursor:pointer;padding:6px}
 .fl{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:6px 0 10px}
@@ -100,7 +104,7 @@ tr.sr td{font-size:.8rem;color:var(--mut)}
 </head>
 <body>
 <div class="wrap">
-  <h1>💸 Controle de Gastos</h1>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h1>💸 Controle de Gastos</h1><button class="btn ghost thm" id="thm" aria-label="Alternar modo claro e noturno">🌙</button></div>
   <div class="sub" id="status">Carregando…</div>
   <div class="tabs">
     <button class="tab on" data-t="in">➕ Lançar</button>
@@ -148,6 +152,7 @@ tr.sr td{font-size:.8rem;color:var(--mut)}
   <section id="cfg" class="hide">
     <div class="card" id="inst"><h2>📲 Instalar no celular</h2><div class="note" id="insthint" style="margin:0 0 10px"></div><button class="btn hide" id="instbtn">Instalar app</button></div>
     <div class="card hide" id="acct"><h2>👤 Conta</h2><div class="note" id="acctinfo" style="margin:0 0 10px"></div><button class="btn alt" id="logout">Sair da conta</button></div>
+    <div class="card"><h2>🎨 Aparência</h2><label>Tema</label><select id="thsel"><option value="auto">Automático (segue o aparelho)</option><option value="light">Claro</option><option value="dark">Noturno</option></select></div>
     <div class="card"><h2>ℹ️ Sobre o app</h2><div class="note" id="aboutv" style="margin:0 0 10px"></div><button class="btn ghost" id="chkupd">Verificar atualização</button><div class="note" id="updmsg"></div></div>
     <div class="card"><h2>🏦 Contas (de onde sai o dinheiro)</h2><div class="note" style="margin:0 0 10px">Livre: paga qualquer coisa. Benefício (vale-refeição etc.): marque em quais categorias ele pode ser usado; ele não transfere para outras contas. Cartão de crédito: as compras viram fatura em aberto. Remover uma conta move os lançamentos dela para a primeira conta da lista.</div><div id="acl"></div>
       <div class="ar" style="grid-template-columns:1fr 130px auto"><input id="nacn" placeholder="Nova conta"><select id="nact"><option value="livre">Livre</option><option value="beneficio">Benefício</option><option value="cartao">Cartão de crédito</option></select><button class="btn" id="addacc">Adicionar</button></div></div>
@@ -163,6 +168,7 @@ tr.sr td{font-size:.8rem;color:var(--mut)}
     <div id="sal"></div>
     <div id="bal"></div>
     <div class="kpis" id="kpis"></div>
+    <div class="card"><h2>🌊 Fluxo do dinheiro <small id="skm" style="font-weight:400;color:var(--mut)"></small></h2><div class="scroll"><div id="sankey"></div></div><div class="note skhint">Arraste para o lado para ver o gráfico inteiro.</div><div class="note">Mostra para onde foi a renda do mês: despesas por categoria e o que sobrou. Categorias pequenas ficam agrupadas em “Outras”.</div></div>
     <div class="two">
       <div class="card"><h2>Gastos por categoria</h2><div class="donutwrap"><div class="donut" id="donut"><span id="dtot"></span></div><div class="leg" id="leg"></div></div></div>
       <div class="card"><h2>Evolução — últimos 6 meses</h2><div class="bars" id="bars"></div></div>
@@ -236,7 +242,7 @@ const curM=todayStr.slice(0,7);
 /* ===== CONFIGURAÇÃO DA NUVEM (Supabase) — cole aqui a URL e a chave pública do seu projeto ===== */
 const SB_URL='https://lngqxbkbvikvrlrbuulu.supabase.co', SB_KEY='sb_publishable_jwqyWQvSrlaAvqVDZHj5lQ_LiTZ5IAY';
 /* ================================================================================================ */
-const APP_VERSION='2.0.0', APP_DATA='08/11/2026';
+const APP_VERSION='2.1.0', APP_DATA='09/11/2026';
 const SB_ON=SB_URL.indexOf('https://')===0&&SB_KEY.length>20&&SB_KEY.indexOf('COLE')!==0;
 let items=[], col=null, mode=SB_ON?'none':'local';
 
@@ -671,6 +677,51 @@ function subDetail(cur,prv,m,pm){
   }
   $('subd').innerHTML=h+`</table></div><div class='note'>Somam só os lançamentos que têm subcategoria.</div>`;
 }
+function mixW(hex,p){
+  const n=parseInt((hex||'#94a3b8').slice(1),16),f=c=>Math.round(c+(255-c)*p);
+  return 'rgb('+f(n>>16)+','+f((n>>8)&255)+','+f(n&255)+')';
+}
+function sankey(rec,tot,bc,m){
+  const el=$('sankey');$('skm').textContent='— '+lbl(m);
+  if(!(tot>0)){el.innerHTML=`<div class='empty'>Sem despesas neste mês para mostrar o fluxo.</div>`;return}
+  const brs=v=>'R$ '+Math.round(v).toLocaleString('pt-BR');
+  const all=Object.entries(bc).sort((a,b)=>b[1]-a[1]);
+  const main=[],others=[];
+  all.forEach(([c,v],i)=>{const k=CI[c]||CI['Outros'];const nd={n:c,v,col:k[2],ico:k[1]};(i<7&&(v/tot>=0.03||i<3))?main.push(nd):others.push(nd)});
+  if(others.length===1)main.push(others[0]);
+  else if(others.length>1)main.push({n:'Outras ('+others.length+')',v:others.reduce((s,x)=>s+x.v,0),col:'#94a3b8',ico:'📦'});
+  const C={rec:'#7ccba0',desp:'#f2a98f',sobra:'#8fd3c4',def:'#f0a6b4'};
+  const W=720,NW=12,X0=6,X1=262,X2=486,PAD=12,GAP=26,GS=14,n=main.length;
+  const H=Math.max(330,n*46+2*PAD),base=Math.max(rec,tot);
+  const k=Math.min((H-2*PAD-GAP*(n-1))/tot,(H-2*PAD-GS)/base);
+  const sobra=Math.max(0,rec-tot),falta=Math.max(0,tot-rec),pr=Math.min(rec,tot);
+  // colunas
+  const s0=[];if(rec>0)s0.push({id:'rec',n:'Renda',v:rec,col:C.rec,pct:100});
+  if(falta>0)s0.push({id:'def',n:rec>0?'Acima da renda':'Sem renda lançada',v:falta,col:C.def});
+  const s1=[{id:'desp',n:'Despesas',v:tot,col:C.desp,pct:rec>0?tot/rec*100:100}];
+  if(sobra>0)s1.push({id:'sobra',n:'Sobra',v:sobra,col:C.sobra,pct:sobra/rec*100});
+  const place=(arr,x,gap)=>{let y=PAD;arr.forEach(o=>{o.x=x;o.y=y;o.h=Math.max(o.v*k,4);y+=o.h+gap})};
+  place(s0,X0,GS);place(s1,X1,GS);place(main,X2,GAP);
+  const N={};[...s0,...s1].forEach(o=>N[o.id]=o);
+  const out={},inn={};[...s0,...s1].forEach(o=>{out[o.id]=o.y;inn[o.id]=o.y});
+  let defs='',paths='',gi=0;
+  const band=(xa,ya,ha,xb,yb,hb,c1,c2)=>{
+    const id='sk'+(gi++),xm=(xa+xb)/2;
+    defs+=`<linearGradient id='${id}' x1='0' x2='1' y1='0' y2='0'><stop offset='0' stop-color='${c1}' stop-opacity='.5'/><stop offset='1' stop-color='${c2}' stop-opacity='.5'/></linearGradient>`;
+    paths+=`<path d='M${xa},${ya} C${xm},${ya} ${xm},${yb} ${xb},${yb} L${xb},${yb+hb} C${xm},${yb+hb} ${xm},${ya+ha} ${xa},${ya+ha} Z' fill='url(#${id})'/>`;
+  };
+  const link=(from,to,v)=>{const a=N[from],b=N[to],h=v*k;band(a.x+NW,out[from],h,b.x,inn[to],h,a.col,b.col);out[from]+=h;inn[to]+=h};
+  if(N.rec&&pr>0)link('rec','desp',pr);
+  if(N.def)link('def','desp',falta);
+  if(N.rec&&sobra>0)link('rec','sobra',sobra);
+  main.forEach(o=>{const h=o.v*k,a=N.desp;band(a.x+NW,out.desp,h,o.x,o.y,o.h,C.desp,mixW(o.col,.45));out.desp+=h});
+  // nós e rótulos
+  let nodes='',labels='';
+  const lab=(x,o,l1,l2)=>{const cy=o.y+o.h/2;labels+=`<text x='${x}' y='${cy-3}' style='fill:var(--tx);font-size:13px;font-weight:700'>${l1}</text><text x='${x}' y='${cy+13}' style='fill:var(--mut);font-size:12px'>${l2}</text>`};
+  [...s0,...s1].forEach(o=>{nodes+=`<rect x='${o.x}' y='${o.y}' width='${NW}' height='${o.h}' rx='3' fill='${o.col}'/>`;lab(o.x+NW+8,o,esc(o.n),brs(o.v)+(o.pct!=null?' · '+Math.round(o.pct)+'%':''))});
+  main.forEach(o=>{nodes+=`<rect x='${o.x}' y='${o.y}' width='${NW}' height='${o.h}' rx='3' fill='${mixW(o.col,.3)}'/>`;lab(o.x+NW+8,o,o.ico+' '+esc(o.n),brs(o.v)+' · '+Math.round(o.v/tot*100)+'%')});
+  el.innerHTML=`<svg viewBox='0 0 ${W} ${H}' style='width:100%;min-width:620px;height:auto;display:block' role='img' aria-label='Fluxo do dinheiro: renda, despesas por categoria e sobra'><defs>${defs}</defs>${paths}${nodes}${labels}</svg>`;
+}
 function budChart(bc){
   const e=CATS.filter(c=>cfg.budgets[c[0]]>0);
   $('bud').innerHTML=e.length?e.map(c=>{const b=cfg.budgets[c[0]],s=bc[c[0]]||0,p=s/b*100,g=p>100?'linear-gradient(90deg,#ef4444,#ec4899)':p>=80?'linear-gradient(90deg,#f59e0b,#facc15)':'linear-gradient(90deg,#10b981,#22d3ee)';
@@ -733,7 +784,7 @@ function dash(){
   $("donut").style.background=tot?`conic-gradient(${stops.join(",")})`:"var(--bd)";
   $("dtot").textContent=tot?brl(tot):"Sem dados";
   $("leg").innerHTML=top.map(([c,v])=>{const k=CI[c]||CI["Outros"];return `<div><i style="background:linear-gradient(135deg,${k[2]},${k[3]})"></i>${k[1]} ${esc(c)}<em>${(v/tot*100).toFixed(0)}% · ${brl(v)}</em></div>`}).join("");
-  locChart(cur,tot);budChart(bc);saldoKpi(m,tot);balKpi(m);subDetail(cur,prv,m,pm);
+  locChart(cur,tot);budChart(bc);saldoKpi(m,tot);balKpi(m);subDetail(cur,prv,m,pm);sankey(sum(inR(m)),tot,bc,m);
   /* barras 6 meses */
   const ms=[];let t=m;for(let i=0;i<6;i++){ms.unshift(t);t=prevM(t)}
   const vals=ms.map(x=>sum(inM(x))),mx=Math.max(...vals,1);
@@ -756,6 +807,20 @@ $('instbtn').onclick=async()=>{if(!dip)return;dip.prompt();try{await dip.userCho
     ?'No iPhone: abra no Safari, toque em Compartilhar (quadrado com seta) e depois em “Adicionar à Tela de Início”.'
     :'No Android (Chrome): toque no botão abaixo ou, no menu ⋮, em “Instalar app” / “Adicionar à tela inicial”.';
 })();
+function effTheme(){const t=document.documentElement.getAttribute('data-theme');return t||((window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark')}
+function applyTheme(t){
+  const r=document.documentElement;
+  if(t==='light'||t==='dark'){r.setAttribute('data-theme',t);try{localStorage.setItem('gastos_tema',t)}catch(e){}}
+  else{r.removeAttribute('data-theme');try{localStorage.removeItem('gastos_tema')}catch(e){}}
+  const e=effTheme();
+  $('mtc').setAttribute('content',e==='dark'?'#2a2457':'#efe9ff');
+  $('thm').textContent=e==='dark'?'☀️':'🌙';$('thm').title=e==='dark'?'Mudar para o modo claro':'Mudar para o modo noturno';
+  $('thsel').value=(t==='light'||t==='dark')?t:'auto';
+}
+$('thm').onclick=()=>applyTheme(effTheme()==='dark'?'light':'dark');
+$('thsel').onchange=()=>applyTheme($('thsel').value);
+(function(){let st=null;try{st=localStorage.getItem('gastos_tema')}catch(e){}applyTheme(st);
+  if(window.matchMedia){const mq=matchMedia('(prefers-color-scheme: light)');const f=()=>{if(!document.documentElement.getAttribute('data-theme'))applyTheme(null)};mq.addEventListener?mq.addEventListener('change',f):mq.addListener&&mq.addListener(f)}})();
 $('aboutv').textContent='Versão '+APP_VERSION+' · '+APP_DATA;
 $('foot').textContent='Controle de Gastos · v'+APP_VERSION;
 let swReg=null,swWait=null,updClicked=false;

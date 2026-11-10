@@ -4,7 +4,7 @@
    - Página principal: tenta a internet primeiro (assim as atualizações chegam) e usa a cópia guardada se estiver offline.
    - Nova versão: fica "esperando" até a pessoa tocar em "Atualizar agora" no aviso do app.
    IMPORTANTE: a cada versão nova, troque o VERSION abaixo (e o APP_VERSION no index.html) para os celulares perceberem. */
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const V = 'gastos-' + VERSION;
 const SHELL = ['./', './index.html', './manifest.webmanifest', './supabase.js', './icon-192.png', './icon-512.png', './icon-maskable-512.png', './apple-touch-icon.png'];
 
